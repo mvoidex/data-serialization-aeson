@@ -5,7 +5,9 @@ module Data.Serialization.JSON.Aeson (
     ToObject, toMember,
     Jsonable,
     member,
-    toJSON, fromJSON
+    toJSON, fromJSON,
+
+    module Data.Serialization.Text.Aeson
     ) where
 
 import Control.Applicative
@@ -20,6 +22,8 @@ import Data.Serialization.Serialize
 import Data.Serialization.Deserialize
 import Data.Serialization.Serializable
 import Data.Text
+
+import Data.Serialization.Text.Aeson
 
 -- | Deserialize from object
 newtype FromObject a = FromObject {
