@@ -16,10 +16,10 @@ $(makeIso "result" ''Result)
 -- ^ result :: Iso (Result s a) (Either (s, a) (Either (String, Maybe a) [String]))
 
 test :: (ToJSON s, FromJSON s, ToJSON a, FromJSON a) => Jsonable (Result s a)
-test =
-    (member "result" .**. member "state") .++.        -- ^ for ValidResult
-    (member "error" .**. try (member "maybe")) .++.  -- ^ for InvalidResult
-    (member "unknown")                                 -- ^ for UnknownResult
+test = object $
+    (member_ "result" .**. member_ "state") .++.        -- ^ for ValidResult
+    (member_ "error" .**. try (member_ "maybe")) .++.  -- ^ for InvalidResult
+    (member_ "unknown")                                 -- ^ for UnknownResult
     .:.
     result                                            -- ^ Convert to Result s a
 </pre>
@@ -40,6 +40,6 @@ to encode/decode to ByteString:
 
 <pre>
 test3 :: Either String ByteString
-test3 = encode (json &lt;~&rt; test) (ValidResult 123 "blabla")
+test3 = encode (json &lt;~&gt; test) (ValidResult 123 "blabla")
 -- test3 = "{\"state\":\"blabla\",\"result\":123}"
 </pre>
