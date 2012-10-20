@@ -69,7 +69,7 @@ instance Deserialization FromObject Aeson.Object where
         when (not $ HM.null obj) $ lift mzero
     deserializeTail = FromObject $ do
         obj <- get
-        put $ HM.empty
+        put HM.empty
         return obj
 
 -- | Deserialize from value
