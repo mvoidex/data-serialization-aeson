@@ -18,8 +18,9 @@ library
         unordered-containers         >= 0.2 && < 0.3,
         mtl                          >= 2.0 && < 2.2,
         vector                      == 0.10.*,
-        data-serialization           >= 0.1 && < 0.2,
-        data-serialization-attoparsec >= 0.1 && < 0.2
+        data-serialization           == 0.1.*,
+        data-serialization-attoparsec == 0.1.*,
+        data-serialization-dictionary == 0.1.*
     exposed-modules:
         Data.Serialization.JSON.Aeson
         Data.Serialization.Text.Aeson

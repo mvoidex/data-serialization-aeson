@@ -35,6 +35,8 @@ module Data.Serialization.JSON.Aeson (
     array,
     value,
 
+    dict,
+
     module Data.Serialization.Text.Aeson
     ) where
 
@@ -50,6 +52,8 @@ import Data.Aeson ((.:), (.=))
 import Data.Serialization.Serialize
 import Data.Serialization.Deserialize
 import Data.Serialization.Serializable
+import Data.Serialization.Combinators
+import Data.Serialization.Dictionary
 import Data.Text
 import qualified Data.Vector as V
 
@@ -204,3 +208,10 @@ array v = serializable (toArray $ serializer v) (fromArray $ deserializer v) whe
 -- | Serialize any value
 value :: (Aeson.ToJSON a, Aeson.FromJSON a) => Jsonable a
 value = serializable toValue fromValue
+
+instance (Aeson.ToJSON a, Aeson.FromJSON a) => DictionaryValue Aeson.Value a where
+    dictionaryValue = Convertible (encode value) (decode value)
+
+-- | 'Jsonable' from 'Dictionarable'
+dict :: Dictionarable Text Aeson.Value a -> Jsonable a
+dict d = value <~> d
