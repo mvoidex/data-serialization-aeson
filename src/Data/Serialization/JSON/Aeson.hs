@@ -150,7 +150,7 @@ instance GenericEncode ToObject where
             [("", x)] -> tell [fromString name .= x]
             _ -> tell $ [fromString name .= Aeson.Object v]
 instance Serializer ToObject Aeson.Object where
-    serialize (ToObject p) = HM.fromList <$> execWriterT p
+    serialize (ToObject p) = fmap HM.fromList $ encodeTo p
     serializeTail = tell . HM.toList
 
 -- | Serialize to value
