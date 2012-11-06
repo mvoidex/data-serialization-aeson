@@ -20,5 +20,5 @@ import Data.Serialization.Text.Attoparsec
 
 import qualified Data.Aeson as A
 
-json :: SerializableT ByteString Print Atto A.Value
-json = serializable (printWith (B.concat . L.toChunks . A.encode)) (atto A.json)
+json :: CodecT ByteString Print Atto A.Value
+json = codec (printWith (B.concat . L.toChunks . A.encode)) (atto A.json)

@@ -1,5 +1,5 @@
 name:              data-serialization-aeson
-version:           0.1.2
+version:           0.2.0
 synopsis:          Serialization library bindings for Aeson
 homepage:          http://github.com/mvoidex/data-serialization-aeson
 author:            Alexandr `voidex` Ruchkin
@@ -13,14 +13,14 @@ library
     build-depends:
         base                         >= 4 && < 6,
         text                         == 0.11.*,
-        bytestring               == 0.9.*,
+        bytestring               == 0.10.*,
         aeson                        >= 0.6 && < 0.7,
         unordered-containers         >= 0.2 && < 0.3,
         mtl                          >= 2.0 && < 2.2,
         vector                      >= 0.9 && < 0.11,
-        data-serialization           == 0.1.*,
-        data-serialization-attoparsec == 0.1.*,
-        data-serialization-dictionary == 0.1.*
+        data-serialization           == 0.2.*,
+        data-serialization-attoparsec == 0.2.*,
+        data-serialization-dictionary == 0.2.*
     exposed-modules:
         Data.Serialization.JSON.Aeson
         Data.Serialization.Text.Aeson

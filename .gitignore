@@ -1,0 +1,12 @@
+
+# vim swap files
+.*.sw[a-z]
+
+# haskell's junk
+dist
+cabal-dev
+*.hi
+*.o
+
+# logs
+*.log

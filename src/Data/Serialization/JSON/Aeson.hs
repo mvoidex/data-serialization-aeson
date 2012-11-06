@@ -1,28 +1,56 @@
-{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, MultiParamTypeClasses, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings, DeriveGeneric, TypeSynonymInstances, FlexibleInstances, FlexibleContexts, MultiParamTypeClasses, GeneralizedNewtypeDeriving, OverlappingInstances #-}
 
 -- | Module implements serialization for JSON
 --
 -- Example of usage:
 --
--- @
--- data Some = Some Int Double [String]
+-- >data MyData = MyData {
+-- >    myDataInt :: Int,
+-- >    myDataString :: String }
+-- >        deriving (Generic, Show)
+-- >
+-- >instance Serializable (Codec Aeson.Object ToObject FromObject) MyData
+-- >
+-- >myData :: JsonMemberable MyData
+-- >myData = ser
+-- >
+-- >value = encode myData (MyData 0 "hello")
+-- >-- Right fromList [("myDataInt",Number 0),("myDataString",String "Hello!")]
 -- 
--- $(makeIso \"some\" ''Some)
---
--- someJson :: Jsonable Some
--- someJson = object $
---   member "int" value .**.
---   member "double" value .**.
---   member "strings" (array value)
---   .:.
---   some
---
--- test :: encode someJson (Some 1 1.2 \"Hello\")
--- @
---
+-- Objects can be nested:
+-- 
+-- >data MyData2 = MyData2 {
+-- >    myData2String :: String,
+-- >    myDataNested :: MyData }
+-- >        deriving (Generic, Show)
+-- >
+-- >instance Serializable (Codec Aeson.Object ToObject FromObject) MyData2
+-- >
+-- >myData2 :: JsonMemberable MyData2
+-- >myData2 = ser
+-- >
+-- >value2 = encode myData2 (MyData2 "foo" (MyData 10 "string"))
+-- >-- Right fromList [("myDataNested",Object fromList [("myDataInt",Number 10),("myDataString",String "string")]),("myData2String",String "foo")]
+-- 
+-- And objects can be embedded within parent (so its fields placed in parent object directly). Note how @myData2String@ is placed in top object:
+-- 
+-- >data MyData3 = MyData3 {
+-- >    myDataDouble :: Double,
+-- >    myDataEmbed :: Embed MyData2 }
+-- >        deriving (Generic, Show)
+-- >
+-- >instance Serializable (Codec Aeson.Object ToObject FromObject) MyData3
+-- >
+-- >myData3 :: JsonMemberable MyData3
+-- >myData3 = ser
+-- >
+-- >value3 = encode myData3 (MyData3 0.4 (Embed (MyData2 "foo" (MyData 10 "string"))))
+-- >-- Right fromList [("myDataDouble",Number 0.4),("myDataNested",Object fromList [("myDataInt",Number 10),("myDataString",String "string")]),("myData2String",String "foo")]
+-- 
 module Data.Serialization.JSON.Aeson (
     FromObject, FromValue, ToObject, ToValue,
     Jsonable, JsonMemberable,
+    Embed(..),
     fromMember_, toMember_,
     fromMember, toMember,
     fromValue, toValue,
@@ -40,120 +68,151 @@ module Data.Serialization.JSON.Aeson (
     module Data.Serialization.Text.Aeson
     ) where
 
+import Control.Arrow
 import Control.Applicative
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Writer
+import Control.Monad.Error
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Types as Aeson
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, isJust)
 import Data.Aeson ((.:), (.=))
-import Data.Serialization.Serialize
-import Data.Serialization.Deserialize
-import Data.Serialization.Serializable
-import Data.Serialization.Combinators
-import Data.Serialization.Dictionary
-import Data.Text
+import Data.Text as T
+import Data.String (fromString)
 import qualified Data.Vector as V
+import GHC.Generics
 
+import Data.Serialization.Combine
+import Data.Serialization.Wrap
+import Data.Serialization.Generic
+import Data.Serialization.Codec
+import Data.Serialization.Dictionary
+import Data.Serialization.Combinators
 import Data.Serialization.Text.Aeson
 
 -- | Deserialize from object
-newtype FromObject a = FromObject {
-    runFromObject :: StateT Aeson.Object Aeson.Parser a }
-        deriving (Functor, Applicative, Alternative, Monad)
+newtype FromObject a = FromObject { runFromObject :: StateT Aeson.Object Aeson.Parser a }
+    deriving (Functor, Applicative, Alternative, Monad, MonadState Aeson.Object, Generic)
 
-instance Deserialization FromObject Aeson.Object where
-    runDeserialization (FromObject f) v = case Aeson.parse (evalStateT f) v of
+instance MonadFail FromObject
+instance GenericDecode FromObject where
+    decodeStor name m = do
+        v <- state (HM.lookup name' &&& HM.delete name')
+        let
+            subFields obj = case obj of
+                Aeson.Object fs -> fs
+                _ -> HM.singleton T.empty obj
+        maybe (fail $ "Field " ++ name ++ " not found") (either fail return . deserialize m . subFields) v
+        where
+            name' = fromString name
+instance Deserializer FromObject Aeson.Object where
+    deserialize (FromObject p) s = case Aeson.parse (evalStateT p) s of
         Aeson.Error s -> Left s
         Aeson.Success r -> Right r
-    deserializationEof _ = FromObject $ do
+    deserializeEof _ = do
         obj <- get
-        when (not $ HM.null obj) $ lift mzero
-    deserializeTail = FromObject $ do
+        when (not $ HM.null obj) $ fail "EOF expected"
+    deserializeTail = do
         obj <- get
         put HM.empty
         return obj
 
 -- | Deserialize from value
-newtype FromValue a = FromValue {
-    runFromValue :: StateT (Maybe Aeson.Value) Aeson.Parser a }
-        deriving (Functor, Applicative, Alternative, Monad)
+newtype FromValue a = FromValue { runFromValue :: StateT (Maybe Aeson.Value) Aeson.Parser a }
+    deriving (Functor, Applicative, Alternative, Monad, MonadState (Maybe Aeson.Value), Generic)
 
-instance Deserialization FromValue Aeson.Value where
-    runDeserialization (FromValue f) v = case Aeson.parse (evalStateT f) (Just v) of
-        Aeson.Error s -> Left s
+instance MonadFail FromValue
+instance GenericDecode FromValue where
+instance Deserializer FromValue Aeson.Value where
+    deserialize (FromValue p) s = case Aeson.parse (evalStateT p) (Just s) of
+        Aeson.Error e -> Left e
         Aeson.Success r -> Right r
-    deserializationEof _ = FromValue $ do
+    deserializeEof _ = do
         obj <- get
-        maybe (return ()) (const $ lift mzero) obj
-    deserializeTail = FromValue $ do
+        when (isJust obj) $ fail "EOF expected"
+    deserializeTail = do
         obj <- get
         put Nothing
         maybe (return Aeson.Null) return obj
 
 -- | Serialize to object
-newtype ToObject a = ToObject {
-    runToObject :: WriterT [Aeson.Pair] (Either String) a }
-        deriving (Functor, Applicative, Alternative, Monad)
+newtype ToObject a = ToObject { runToObject :: EncodeTo [Aeson.Pair] a }
+    deriving (Functor, Applicative, Alternative, Monad, MonadWriter [Aeson.Pair], MonadError String, Generic)
 
-instance Serialization ToObject Aeson.Object where
-    runSerialization (ToObject t) = HM.fromList <$> execWriterT t
-    serializeTail v = ToObject $ tell $ HM.toList v
+instance GenericEncode ToObject where
+    encodeStor name m x = do
+        v <- either throwError return $ serialize (m x)
+        -- if v contains one element with empty name, serialize value as sub-object
+        -- otherwise embed it
+        case HM.toList v of
+            [("", x)] -> tell [fromString name .= x]
+            _ -> tell $ [fromString name .= Aeson.Object v]
+instance Serializer ToObject Aeson.Object where
+    serialize (ToObject p) = HM.fromList <$> execWriterT p
+    serializeTail = tell . HM.toList
 
 -- | Serialize to value
-newtype ToValue a = ToValue {
-    runToValue :: StateT (Maybe Aeson.Value) (Either String) a }
-        deriving (Functor, Applicative, Alternative, Monad)
+newtype ToValue a = ToValue { runToValue :: StateT (Maybe Aeson.Value) (Either String) a }
+    deriving (Functor, Applicative, Alternative, Monad, MonadState (Maybe Aeson.Value), MonadError String, Generic)
 
-instance Serialization ToValue Aeson.Value where
-    runSerialization (ToValue t) = maybe Aeson.Null id <$> execStateT t Nothing
-    serializeTail v = ToValue $ do
+instance GenericEncode ToValue
+instance Serializer ToValue Aeson.Value where
+    serialize (ToValue p) = maybe Aeson.Null id <$> execStateT p Nothing
+    serializeTail v = do
         obj <- get
-        maybe (put (Just v)) (const $ lift $ Left "Can't serialize tail: json object is not null") obj
+        maybe (put (Just v)) (const $ throwError "Can't serialize tail: json object is not null") obj
 
 -- | Type of serializable
-type Jsonable a = Serializable Aeson.Value ToValue FromValue a
+type Jsonable a = Codec Aeson.Value ToValue FromValue a
 
 -- | Type of serializable as part of object
-type JsonMemberable a = Serializable Aeson.Object ToObject FromObject a
+type JsonMemberable a = Codec Aeson.Object ToObject FromObject a
+
+instance (Aeson.FromJSON a, Aeson.ToJSON a) => Serializable (Codec Aeson.Object ToObject FromObject) a where
+    ser = member "" value
+
+-- | Embed a used to tell serializer, that object must not be serialized as subobject, its fields must be placed directly in parent object instead.
+data Embed a = Embed { unEmbed :: a }
+    deriving (Generic, Show)
+
+instance (Selector c, Serializable (Codec Aeson.Object ToObject FromObject) a) => GenericSerializable (Codec Aeson.Object ToObject FromObject) (Stor c (Embed a)) where
+    gser = ser .:. Iso (unEmbed . unStor) (Stor . Embed)
 
 -- | Deserialize member
-fromMember_ :: (Aeson.FromJSON a) => Text -> Deserialize FromObject a
-fromMember_ name = Deserialize $ FromObject $ do
+fromMember_ :: (Aeson.FromJSON a) => Text -> Decoding FromObject a
+fromMember_ name = Decoding $ do
     obj <- get
     put (HM.delete name obj)
-    lift $ obj .: name
+    FromObject $ lift $ obj.: name
 
 -- | Serialize member
-toMember_ :: (Aeson.ToJSON a) => Text -> Serialize ToObject a
-toMember_ name = Serialize $ \v -> ToObject $ tell [name .= v]
+toMember_ :: (Aeson.ToJSON a) => Text -> Encoding ToObject a
+toMember_ name = encodePart $ \v -> Right [name .= v]
 
 -- | Deserialize member with deserializer
-fromMember :: Text -> Deserialize FromValue a -> Deserialize FromObject a
-fromMember name s = Deserialize $ FromObject $ do
+fromMember :: Text -> Decoding FromValue a -> Decoding FromObject a
+fromMember name s = Decoding $ do
     obj <- get
     put (HM.delete name obj)
-    value <- lift $ obj .: name
-    lift $ evalStateT (runFromValue $ runDeserialize s) $ Just value
+    value <- FromObject $ lift $ obj .: name
+    either fail return $ decode s (value :: Aeson.Value)
 
 -- | Serialize member with serializer
-toMember :: Text -> Serialize ToValue a -> Serialize ToObject a
-toMember name s = Serialize $ \v -> ToObject $ do
-    value <- lift $ execStateT (runToValue $ runSerialize s v) Nothing
-    tell [name .= value]
+toMember :: Text -> Encoding ToValue a -> Encoding ToObject a
+toMember name s = encodePart $ fmap (\x -> [name .= (x :: Aeson.Value)]) . encode s
 
 -- | Deserialize value
-fromValue :: (Aeson.FromJSON a) => Deserialize FromValue a
-fromValue = Deserialize $ FromValue $ do
+fromValue :: (Aeson.FromJSON a) => Decoding FromValue a
+fromValue = Decoding $ do
     obj <- get
     put Nothing
-    maybe (lift $ fail "EOF") (lift . Aeson.parseJSON) obj
+    maybe (fail "EOF") (FromValue . lift . Aeson.parseJSON) obj
 
 -- | Serialize value
-toValue :: (Aeson.ToJSON a) => Serialize ToValue a
-toValue = Serialize $ ToValue . put . Just . Aeson.toJSON
+toValue :: (Aeson.ToJSON a) => Encoding ToValue a
+toValue = Encoding $ put . Just . Aeson.toJSON
 
 -- | ToJSON from Jsonable
 toJSON :: Jsonable a -> a -> Aeson.Value
@@ -162,52 +221,49 @@ toJSON s = either onError id . encode s where
 
 -- | FromJSON from Jsonable
 fromJSON :: Jsonable a -> Aeson.Value -> Aeson.Parser a
-fromJSON s v = evalStateT (runFromValue $ runDeserialize $ deserializer s) (Just v)
+fromJSON s v = evalStateT (runFromValue $ runDecoding $ decoder s) (Just v)
 
 -- | Member of object
 member_ :: (Aeson.ToJSON a, Aeson.FromJSON a) => Text -> JsonMemberable a
-member_ name = serializable (toMember_ name) (fromMember_ name)
+member_ name = codec (toMember_ name) (fromMember_ name)
 
 -- | Member of object with serializator
 member :: Text -> Jsonable a -> JsonMemberable a
-member name s = serializable (toMember name $ serializer s) (fromMember name $ deserializer s)
+member name s = codec (toMember name $ encoder s) (fromMember name $ decoder s)
 
 -- | Serialize object
 object :: JsonMemberable a -> Jsonable a
-object v = serializable (toObject $ serializer v) (fromObject $ deserializer v) where
-    toObject :: Serialize ToObject a -> Serialize ToValue a
-    toObject s = Serialize $ \v -> ToValue $ do
-        v' <- lift $ runSerialization $ runSerialize s v
-        put $ Just $ Aeson.Object v'
-    fromObject :: Deserialize FromObject a -> Deserialize FromValue a
-    fromObject s = Deserialize $ FromValue $ do
+object v = codec (toObject $ encoder v) (fromObject $ decoder v) where
+    toObject :: Encoding ToObject a -> Encoding ToValue a
+    toObject s = Encoding $ either throwError (put . Just . Aeson.Object) . encode s
+    fromObject :: Decoding FromObject a -> Decoding FromValue a
+    fromObject s = Decoding $ do
         obj <- get
         case obj of
             Just (Aeson.Object v) -> do
                 put Nothing
-                either (lift . fail) return $ runDeserialization (runDeserialize s) v
-            Just _ -> lift $ fail "Not an object"
-            Nothing -> lift $ fail "Nothing to deserialize"
+                either fail return $ decode s v
+            Just _ -> fail "JSON object expected"
+            Nothing -> fail "JSON EOF"
 
 -- | Serialize array of values
 array :: Jsonable a -> Jsonable [a]
-array v = serializable (toArray $ serializer v) (fromArray $ deserializer v) where
-    toArray :: Serialize ToValue a -> Serialize ToValue [a]
-    toArray s = Serialize $ \v -> ToValue $ do
-        vs <- fmap catMaybes $ lift $ mapM ((`execStateT` Nothing) . runToValue . runSerialize s) v
-        put $ Just $ Aeson.Array $ V.fromList vs
-    fromArray :: Deserialize FromValue a -> Deserialize FromValue [a]
-    fromArray s = Deserialize $ FromValue $ do
+array v = codec (toArray $ encoder v) (fromArray $ decoder v) where
+    toArray :: Encoding ToValue a -> Encoding ToValue [a]
+    toArray s = Encoding $ either throwError (put . Just . Aeson.Array . V.fromList) . mapM (encode s)
+    fromArray :: Decoding FromValue a -> Decoding FromValue [a]
+    fromArray s = Decoding $ do
         obj <- get
         case obj of
             Just (Aeson.Array v) -> do
-                mapM (either (lift . fail) return . runDeserialization (runDeserialize s)) (V.toList v)
-            Just _ -> lift $ fail "Not an array"
-            Nothing -> lift $ fail "Nothing to deserialize"
+                put Nothing
+                either fail return $ mapM (decode s) $ V.toList v
+            Just _ -> fail "JSON array expected"
+            Nothing -> fail "JSON EOF"
 
 -- | Serialize any value
 value :: (Aeson.ToJSON a, Aeson.FromJSON a) => Jsonable a
-value = serializable toValue fromValue
+value = codec toValue fromValue
 
 instance (Aeson.ToJSON a, Aeson.FromJSON a) => DictionaryValue Aeson.Value a where
     dictionaryValue = Convertible (encode value) (decode value)
