@@ -107,7 +107,7 @@ instance GenericDecode FromObject where
         maybe (fail $ "Field " ++ name ++ " not found") (either fail return . deserialize m . subFields) v
         where
             name' = fromString name
-instance Deserializer FromObject Aeson.Object where
+instance Deserializer Aeson.Object FromObject where
     deserialize (FromObject p) s = case Aeson.parse (evalStateT p) s of
         Aeson.Error s -> Left s
         Aeson.Success r -> Right r
@@ -125,7 +125,7 @@ newtype FromValue a = FromValue { runFromValue :: StateT (Maybe Aeson.Value) Aes
 
 instance MonadFail FromValue
 instance GenericDecode FromValue where
-instance Deserializer FromValue Aeson.Value where
+instance Deserializer Aeson.Value FromValue where
     deserialize (FromValue p) s = case Aeson.parse (evalStateT p) (Just s) of
         Aeson.Error e -> Left e
         Aeson.Success r -> Right r
@@ -149,7 +149,7 @@ instance GenericEncode ToObject where
         case HM.toList v of
             [("", x)] -> tell [fromString name .= x]
             _ -> tell $ [fromString name .= Aeson.Object v]
-instance Serializer ToObject Aeson.Object where
+instance Serializer Aeson.Object ToObject where
     serialize (ToObject p) = fmap HM.fromList $ encodeTo p
     serializeTail = tell . HM.toList
 
@@ -158,7 +158,7 @@ newtype ToValue a = ToValue { runToValue :: StateT (Maybe Aeson.Value) (Either S
     deriving (Functor, Applicative, Alternative, Monad, MonadState (Maybe Aeson.Value), MonadError String, Generic)
 
 instance GenericEncode ToValue
-instance Serializer ToValue Aeson.Value where
+instance Serializer Aeson.Value ToValue where
     serialize (ToValue p) = maybe Aeson.Null id <$> execStateT p Nothing
     serializeTail v = do
         obj <- get
