@@ -48,7 +48,7 @@
 -- >-- Right fromList [("myDataDouble",Number 0.4),("myDataNested",Object fromList [("myDataInt",Number 10),("myDataString",String "string")]),("myData2String",String "foo")]
 -- 
 module Data.Serialization.JSON.Aeson (
-    FromObject, FromValue, ToObject, ToValue,
+    FromObject(..), FromValue(..), ToObject(..), ToValue(..),
     Jsonable, JsonMemberable,
     Embed(..),
     fromMember_, toMember_,
