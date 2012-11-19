@@ -119,6 +119,12 @@ instance Deserializer Aeson.Object FromObject where
         put HM.empty
         return obj
 
+instance Aeson.FromJSON a => Serializable (Decoding FromObject) a where
+    ser = fromMember_ ""
+
+instance (Selector c, Serializable (Decoding FromObject) a) => GenericSerializable (Decoding FromObject) (Stor c (Embed a)) where
+    gser = ser .:. Iso (unEmbed . unStor) (Stor . Embed)
+
 -- | Deserialize from value
 newtype FromValue a = FromValue { runFromValue :: StateT (Maybe Aeson.Value) Aeson.Parser a }
     deriving (Functor, Applicative, Alternative, Monad, MonadState (Maybe Aeson.Value), Generic)
@@ -137,6 +143,9 @@ instance Deserializer Aeson.Value FromValue where
         put Nothing
         maybe (return Aeson.Null) return obj
 
+instance Aeson.FromJSON a => Serializable (Decoding FromValue) a where
+    ser = fromValue
+
 -- | Serialize to object
 newtype ToObject a = ToObject { runToObject :: EncodeTo [Aeson.Pair] a }
     deriving (Functor, Applicative, Alternative, Monad, MonadWriter [Aeson.Pair], MonadError String, Generic)
@@ -153,6 +162,12 @@ instance Serializer Aeson.Object ToObject where
     serialize (ToObject p) = fmap HM.fromList $ encodeTo p
     serializeTail = tell . HM.toList
 
+instance Aeson.ToJSON a => Serializable (Encoding ToObject) a where
+    ser = toMember_ ""
+
+instance (Selector c, Serializable (Encoding ToObject) a) => GenericSerializable (Encoding ToObject) (Stor c (Embed a)) where
+    gser = ser .:. Iso (unEmbed . unStor) (Stor . Embed)
+
 -- | Serialize to value
 newtype ToValue a = ToValue { runToValue :: StateT (Maybe Aeson.Value) (Either String) a }
     deriving (Functor, Applicative, Alternative, Monad, MonadState (Maybe Aeson.Value), MonadError String, Generic)
@@ -163,6 +178,9 @@ instance Serializer Aeson.Value ToValue where
     serializeTail v = do
         obj <- get
         maybe (put (Just v)) (const $ throwError "Can't serialize tail: json object is not null") obj
+
+instance Aeson.ToJSON a => Serializable (Encoding ToValue) a where
+    ser = toValue
 
 -- | Type of serializable
 type Jsonable a = Codec Aeson.Value ToValue FromValue a
